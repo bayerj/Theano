@@ -112,8 +112,17 @@ def Rop(f, wrt, eval_points):
                         seen_nodes[inp.owner][inp.owner.outputs.index(inp)])
             for x, y in zip(inputs, local_eval_points):
                 if y is not None:
-                    assert (as_tensor_variable(x).type ==
-                            as_tensor_variable(y).type)
+                    tx, ty = (as_tensor_variable(i) for i in (x, y))
+                    if tx.type != ty.type:
+                        print tx, ty
+                        raise ValueError(
+                            'nodes not of the same type: %s %s' % (
+                                tx.type, ty.type))
+                                        
+                    #print as_tensor_variable(x).type ==
+                    #        as_tensor_variable(y).type
+                    #assert (as_tensor_variable(x).type ==
+                    #        as_tensor_variable(y).type)
 
             seen_nodes[node] = op.R_op(node.inputs, local_eval_points)
             return None

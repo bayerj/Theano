@@ -662,8 +662,23 @@ class Solve(Op):
 
     def perform(self, node, inputs, output_storage):
         A, b = inputs
+        if not numpy.isfinite(A).all() or not numpy.isfinite(b).all():
+            if b.ndim == 2:
+                result = numpy.empty((A.shape[1], b.shape[1]))
+            else:
+                result = numpy.empty((A.shape[1],))
+            result[...] = float('nan')
+            output_storage[0][0] = result
+            return
         #TODO: use the A_structure to go faster
-        output_storage[0][0] = scipy.linalg.solve(A, b)
+        try:
+            output_storage[0][0] = scipy.linalg.solve(A, b)
+        except numpy.linalg.LinAlgError:
+            logger.debug('Failed to solve %s' % str(node.inputs[0]))
+            raise
+        except ValueError:
+            logger.debug('Failed to solve %s' % str(node.inputs[0]))
+            raise
 
     # computes shape of x where x = inv(A) * b
     def infer_shape(self, node, shapes):

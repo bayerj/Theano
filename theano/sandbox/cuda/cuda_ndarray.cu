@@ -798,7 +798,7 @@ __global__ void k_take_3(const int d0, const int d1, const int d2,
 // This prevent us from setting it to 0 before each use
 static int* err_var = NULL;
 
-// We try to be similat to the PyArray_TakeFrom function
+// We try to be similar to the PyArray_TakeFrom function
 //http://docs.scipy.org/doc/numpy/reference/c-api.array.html
 //TODO: support other clip mode then raise(clip, wrap)
 //self is the input that we copy data from.
@@ -1389,6 +1389,45 @@ __global__ void k_ielem_4(const int d0, const int d1, const int d2, const int d3
     }
 }
 
+template <int operator_num>
+__global__ void k_ielem_6(const int d0, const int d1,
+                          const int d2, const int d3,
+                          const int d4, const int d5,
+                          float* a, const int sA0, const int sA1,
+                          const int sA2, const int sA3,
+                          const int sA4, const int sA5,
+                          const float* b, const int sB0, const int sB1,
+                          const int sB2, const int sB3,
+                          const int sB4, const int sB5
+                          ){
+    for (int i0 = blockIdx.x; i0 < d0; i0 += gridDim.x){
+        for (int i1 = blockIdx.y; i1 < d1; i1 += gridDim.y){
+            for (int i2 = blockIdx.z; i2 < d2; i2 += gridDim.z){
+                for (int i3 = threadIdx.x; i3 < d3; i3 += blockDim.x){
+                    for (int i4 = threadIdx.y; i4 < d4; i4 += blockDim.y){
+                        for (int i5 = threadIdx.z; i5 < d5; i5 += blockDim.z){
+                            switch (operator_num) {
+                            case IADD:
+                                a[i0*sA0 + i1*sA1 + i2*sA2 + i3*sA3 + i4*sA4 + i5*sA5]
+                                    += b[i0*sB0 + i1*sB1 + i2*sB2 + i3*sB3 + i4*sB4 + i5*sB5];
+                                break;
+                            case IDIV:
+                                a[i0*sA0 + i1*sA1 + i2*sA2 + i3*sA3 + i4*sA4 + i5*sA5]
+                                    /= b[i0*sB0 + i1*sB1 + i2*sB2 + i3*sB3 + i4*sB4 + i5*sB5];
+                                break;
+                            case CPY:
+                                a[i0*sA0 + i1*sA1 + i2*sA2 + i3*sA3 + i4*sA4 + i5*sA5]
+                                    = b[i0*sB0 + i1*sB1 + i2*sB2 + i3*sB3 + i4*sB4 + i5*sB5];
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /*
 CudaNdarray_inplace_elemwise
 Compute elemwise, working inplace on A.
@@ -1415,19 +1454,31 @@ CudaNdarray_inplace_elemwise(PyObject* py_self, PyObject * py_other, operator_t 
                     const int, const int,
                     const float*, const int, const int,
                     const int, const int);
+    void (*k6)(const int, const int,
+               const int, const int,
+               const int, const int,
+               float*, const int, const int,
+               const int, const int,
+               const int, const int,
+               const float*, const int, const int,
+               const int, const int,
+               const int, const int);
     switch (fct_nb)
     {
         case IADD:
             k3 = k_ielem_3<IADD>;
             k4 = k_ielem_4<IADD>;
+            k6 = k_ielem_6<IADD>;
             break;
         case IDIV:
             k3 = k_ielem_3<IDIV>;
             k4 = k_ielem_4<IDIV>;
+            k6 = k_ielem_6<IDIV>;
             break;
         case CPY:
             k3 = k_ielem_3<CPY>;
             k4 = k_ielem_4<CPY>;
+            k6 = k_ielem_6<CPY>;
             break;
         default:
             assert (0);
@@ -1760,12 +1811,73 @@ CudaNdarray_inplace_elemwise(PyObject* py_self, PyObject * py_other, operator_t 
                     {
                         PyErr_Format(
                             PyExc_RuntimeError,
-                            "Cuda error: %s: %s.\n",
-                            "k4",
-                            cudaGetErrorString(err));
+                            "Cuda error: %s: %s. n_block=(%ld,%ld) n_threads=%ld\n",
+                            "k5 with loop over k4",
+                            cudaGetErrorString(err),
+                            (long) n_blocks.x, (long) n_blocks.y, (long) n_threads.x);
                         Py_XDECREF(new_other);
                         return -1;
                     }
+                }
+            }
+            break;
+        case 6:
+            {
+                dim3 n_blocks(
+                        std::min(
+                            CudaNdarray_HOST_DIMS(self)[0],
+                            NUM_VECTOR_OP_BLOCKS),
+                        CudaNdarray_HOST_DIMS(self)[1],
+                        CudaNdarray_HOST_DIMS(self)[2]
+                        );
+                while (n_blocks.x * n_blocks.y > NUM_VECTOR_OP_BLOCKS)
+                    n_blocks.y /= 2;
+                // GTX285(compute capabilities 1.3) don't support n_blocks.z > 1
+                // (compute capabilities 2.0) support 65535 for n_blocks.z
+                //while (n_blocks.x * n_blocks.y * n_blocks.z > NUM_VECTOR_OP_BLOCKS)
+                //    n_blocks.z /= 2;
+                n_blocks.z = 1;
+                dim3 n_threads(
+                        std::min(
+                            CudaNdarray_HOST_DIMS(self)[3],
+                            NUM_VECTOR_OP_THREADS_PER_BLOCK)
+                    //TODO: DON'T YOU NEED TO PUT DIMS[4] in here???
+                    //TODO: DON'T YOU NEED TO PUT DIMS[5] in here???
+                            );
+                k6<<<n_blocks, n_threads>>>(
+                        CudaNdarray_HOST_DIMS(self)[0],
+                        CudaNdarray_HOST_DIMS(self)[1],
+                        CudaNdarray_HOST_DIMS(self)[2],
+                        CudaNdarray_HOST_DIMS(self)[3],
+                        CudaNdarray_HOST_DIMS(self)[4],
+                        CudaNdarray_HOST_DIMS(self)[5],
+                        CudaNdarray_DEV_DATA(self),
+                        CudaNdarray_HOST_STRIDES(self)[0],
+                        CudaNdarray_HOST_STRIDES(self)[1],
+                        CudaNdarray_HOST_STRIDES(self)[2],
+                        CudaNdarray_HOST_STRIDES(self)[3],
+                        CudaNdarray_HOST_STRIDES(self)[4],
+                        CudaNdarray_HOST_STRIDES(self)[5],
+                        CudaNdarray_DEV_DATA(other),
+                        other_strides[0],
+                        other_strides[1],
+                        other_strides[2],
+                        other_strides[3],
+                        other_strides[4],
+                        other_strides[5]);
+                CNDA_THREAD_SYNC;
+                cudaError_t err = cudaGetLastError();
+                if (cudaSuccess != err)
+                {
+                    PyErr_Format(
+                        PyExc_RuntimeError,
+                        "Cuda error: %s: %s. n_blocks=(%ld, %ld, %ld) n_threads=(%ld)\n",
+                        "k6",
+                        cudaGetErrorString(err),
+                        (long) n_blocks.x, (long) n_blocks.y, (long) n_blocks.z,
+                        (long) n_threads.x);
+                    Py_XDECREF(new_other);
+                    return -1;
                 }
             }
             break;
@@ -2391,8 +2503,58 @@ CudaNdarray_get_strides(CudaNdarray *self, void *closure)
 static int
 CudaNdarray_set_strides(CudaNdarray *self, PyObject *value, void *closure)
 {
-    PyErr_SetString(PyExc_NotImplementedError, "");
-    return -1;
+    //npy_intp newstrides_bytes[PyTuple_Size(value)];
+    if (PyTuple_Check(value)){
+        if (PyTuple_Size(value) != CudaNdarray_NDIM(self)){
+            PyErr_SetString(PyExc_ValueError,
+                            "The new strides tuple must have the same length"
+                            " as the number of dimensions");
+            return -1;
+        }
+    }else if (PyList_Check(value)){
+        if (PyList_Size(value) != CudaNdarray_NDIM(self)){
+            PyErr_SetString(PyExc_ValueError,
+                            "The new strides list must have the same length"
+                            " as the number of dimensions");
+            return -1;
+        }
+    }else{
+        PyErr_SetString(PyExc_ValueError,
+                        "The new strides need to be encoded in a tuple or list");
+        return -1;
+    }
+    npy_intp* newstrides = (npy_intp*) alloca(CudaNdarray_NDIM(self) * sizeof(npy_intp));
+    if (PyTuple_Check(value)){
+        for(int i=0; i < CudaNdarray_NDIM(self); i++){
+            newstrides[i] = PyInt_AsLong(PyTuple_GetItem(value, Py_ssize_t(i)));
+            //newstrides_bytes[i] = newstrides[i] * 4;
+        }
+    }else if (PyList_Check(value)){
+        for(int i=0; i < CudaNdarray_NDIM(self); i++){
+            newstrides[i] = PyInt_AsLong(PyList_GetItem(value, Py_ssize_t(i)));
+            //newstrides_bytes[i] = newstrides[i] * 4;
+        }
+    }
+    /*
+    // Do not do this check, as ExtractDiag needs that, and NumPy does not seem
+    // to do it.
+    npy_intp dims[PyTuple_Size(value)];
+    for(int i=0; i < CudaNdarray_NDIM(self); i++){
+        dims[i] = CudaNdarray_HOST_DIMS(self)[i];
+    }
+    if (!PyArray_CheckStrides(4,
+                              CudaNdarray_NDIM(self),
+                              0, 0,
+                              dims,
+                              newstrides_bytes)){
+        PyErr_SetString(PyExc_ValueError, "bad new strides");
+        return -1;
+        }
+    */
+    for(int i=0; i < CudaNdarray_NDIM(self); i++){
+        CudaNdarray_set_stride(self, i, newstrides[i]);
+    }
+    return 0;
 }
 
 static PyObject *

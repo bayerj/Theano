@@ -2,30 +2,34 @@
 #define _CUDA_NDARRAY_H
 
 // Defines for Python 2/3 compatibility.
-#if PY_MAJOR_VERSION == 3
-// Py3k treats all ints as longs.
-#define PyInt_Check PyLong_Check
-#define PyInt_CheckExact PyLong_CheckExact
-#define PyInt_AsLong PyLong_AsLong
-#define PyInt_FromLong PyLong_FromLong
+#if PY_MAJOR_VERSION >= 3
+// Py3k treats all ints as longs. This one is not caught by npy_3kcompat.h.
 #define PyNumber_Int PyNumber_Long
 
+#include "numpy/npy_3kcompat.h"
+
 // Py3k strings are unicode, these mimic old functionality.
+//
+// NOTE: npy_3kcompat.h replaces PyString_X with PyBytes_X, which breaks
+// compatibility with some functions returning text.
 #define PyString_Check PyUnicode_Check
 #define PyString_FromString PyUnicode_FromString
 #define PyString_AsString PyUnicode_AsUTF8
 #define PyString_FromStringAndSize PyUnicode_FromStringAndSize
 #define PyString_Size PyUnicode_GET_SIZE
 
-#define PyCObject_AsVoidPtr NpyCapsule_AsVoidPtr
-#define PyCObject_GetDesc NpyCapsule_GetDesc
-#define PyCObject_Check NpyCapsule_Check
-
 // Python 3 expects a PyObject* as the first argument to PySlice_GetIndicesEx().
 #define SLICE_CAST(x) (x)
 #else
 // Python 2 expects a PySliceObject* as the first argument to PySlice_GetIndicesEx().
 #define SLICE_CAST(x) ((PySliceObject*)(x))
+#endif // end #if PY_MAJOR_VERSION >= 3
+
+#ifndef Py_TYPE
+#  define Py_TYPE(o) ((o)->ob_type)
+#endif
+#ifndef Py_REFCNT
+#  define Py_REFCNT(o) ((o)->ob_refcnt)
 #endif
 
 #include <numpy/arrayobject.h>
@@ -517,7 +521,6 @@ DllExport PyObject * CudaNdarray_View(const CudaNdarray * self);
 DllExport PyObject * CudaNdarray_inplace_add(PyObject* py_self, PyObject * py_other);
 DllExport PyObject * CudaNdarray_Subscript(PyObject * py_self, PyObject * key);
 DllExport int CudaNdarray_inplace_elemwise(PyObject* py_self, PyObject * py_other, operator_t fct_nb);
-
 
 // Ensures that *arr is a pointer to a contiguous ndarray of the specified
 // dimensions.

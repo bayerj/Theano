@@ -1,12 +1,13 @@
-import sys, time, unittest
+import sys
 
 import numpy
 # Skip test if cuda_ndarray is not available.
 from nose.plugins.skip import SkipTest
 
+import theano
 from theano.compile.pfunc import pfunc
 from theano import config, tensor
-import theano
+import theano.sandbox.linalg.tests.test_linalg
 
 from theano.tests import unittest_tools as utt
 
@@ -47,28 +48,29 @@ def test_int_pow():
     op_names = [n.op.__class__.__name__ for n in f.maker.fgraph.toposort()]
     assert op_names == ['GpuCAReduce', 'GpuElemwise', 'HostFromGpu']
 
-    f = theano.function([a], tensor.pow(a,4).sum(), mode=mode_with_gpu)
+    f = theano.function([a], tensor.pow(a, 4).sum(), mode=mode_with_gpu)
     op_names = [n.op.__class__.__name__ for n in f.maker.fgraph.toposort()]
     assert op_names == ['GpuElemwise', 'GpuCAReduce', 'HostFromGpu']
 
     #theano.printing.debugprint(f)
 
+
 def test_gpualloc():
     '''
     This tests tries to catch the scenario when, due to infer_shape,
-    the input of the alloc changes from tesnor scalar to a constant
+    the input of the alloc changes from tensor scalar to a constant
     1. In this case the original constracted broadcastable pattern will
     have a False for that dimension, but the new broadcastable pattern
     that will be inserted by gpualloc will have  a True since it knows the
     dimension is 1 and therefore broadcastable.
     '''
 
-    x = theano.shared(numpy.ones(3,dtype='float32'), 'x')
-    m = (x).dimshuffle(['x',0])
+    x = theano.shared(numpy.ones(3, dtype='float32'), 'x')
+    m = (x).dimshuffle(['x', 0])
     v = tensor.alloc(1., *m.shape)
-    f = theano.function([], v+x)
+    f = theano.function([], v + x, mode=mode_with_gpu)
     l = f.maker.fgraph.toposort()
-    assert numpy.any(ininstance(x.op, cuda.GpuAlloc) for x in l )
+    assert numpy.any([isinstance(x.op, cuda.GpuAlloc) for x in l])
 
 
 def test_alloc_memset_0():
@@ -379,6 +381,17 @@ def test_erfinvgpu():
     assert isinstance(f.maker.fgraph.toposort()[1].op.scalar_op, cuda.elemwise.ErfinvGPU)
     xv=numpy.random.rand(7,8).astype('float32')
     assert numpy.allclose(f(xv),f2(xv))
+
+
+class test_diag(theano.sandbox.linalg.tests.test_linalg.test_diag):
+    mode = mode_with_gpu
+    shared = staticmethod(cuda.shared_constructor)
+    floatX = 'float32'
+    type = CudaNdarrayType
+
+    def __init__(self, name):
+        super(theano.sandbox.linalg.tests.test_linalg.test_diag,
+              self).__init__(name)
 
 
 if __name__ == '__main__':

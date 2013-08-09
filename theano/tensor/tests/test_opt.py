@@ -2034,7 +2034,7 @@ class test_local_subtensor_merge(unittest.TestCase):
         val = fun(data)
         assert numpy.all(val == data[3:6, 2:6, 1:7][1])
         assert len([n for n in fun.maker.fgraph.toposort()
-                    if isinstance(n.op, tensor.basic.Subtensor)]) == nops
+                    if isinstance(n.op, Subtensor)]) == nops
 
         # test 2)
         y = x[2, 3][1]
@@ -2042,7 +2042,7 @@ class test_local_subtensor_merge(unittest.TestCase):
         val = fun(data)
         assert numpy.all(val == data[2, 3][1])
         assert len([n for n in fun.maker.fgraph.toposort()
-                    if isinstance(n.op, tensor.basic.Subtensor)]) == nops
+                    if isinstance(n.op, Subtensor)]) == nops
 
         # test 3)
         y = x[3:6, 2, 1:7][1]
@@ -2050,7 +2050,7 @@ class test_local_subtensor_merge(unittest.TestCase):
         val = fun(data)
         assert numpy.all(val == data[3:6, 2, 1:7][1])
         assert len([n for n in fun.maker.fgraph.toposort()
-                    if isinstance(n.op, tensor.basic.Subtensor)]) == nops
+                    if isinstance(n.op, Subtensor)]) == nops
 
     def test_scalar6(self):
         # General case with one slice and one index
@@ -3473,7 +3473,7 @@ class T_local_sum(unittest.TestCase):
 
     def test_local_sum_all_to_none(self):
         a = T.tensor3()
-        input = numpy.arange(3 * 3 * 3, dtype=config.floatX).reshape(3, 3, 3)
+        input = numpy.arange(3 * 4 * 5, dtype=config.floatX).reshape(3, 4, 5)
         f = theano.function([a], a.sum(), mode=self.mode)
         assert len(f.maker.fgraph.apply_nodes) == 1
         assert numpy.allclose(f(input), input.sum())
@@ -3493,36 +3493,50 @@ class T_local_sum(unittest.TestCase):
 
     def test_local_sum_sum(self):
         a = T.tensor3()
-        input = numpy.arange(3 * 3 * 3, dtype=config.floatX).reshape(3, 3, 3)
-        dims = [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)]
+        input = numpy.arange(3 * 4 * 5, dtype=config.floatX).reshape(3, 4, 5)
+        dims = [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1),
+                ((0, 1), 0), ((1, 2), 0), (0, (0, 1)),
+                (1, (0, 1)), (2, (0, 1))]
 
         backup = config.warn.sum_sum_bug
         config.warn.sum_sum_bug = False
+
+        def my_sum(data, d, dd):
+            # This sum when d or dd is a tuple of 2 dimensions.
+            if not isinstance(d, tuple) and not isinstance(dd, tuple):
+                return data.sum(d).sum(dd)
+            if isinstance(d, tuple):
+                d = sorted(d)
+                return data.sum(d[1]).sum(d[0]).sum(dd)
+            else:
+                dd = sorted(dd)
+                return data.sum(d).sum(dd[1]).sum(dd[0])
+
         try:
             for d, dd in dims:
+                expected = my_sum(input, d, dd)
                 f = theano.function([a], a.sum(d).sum(dd), mode=self.mode)
-                assert numpy.allclose(f(input), input.sum(d).sum(dd))
+                assert numpy.allclose(f(input), expected)
                 assert len(f.maker.fgraph.apply_nodes) == 1
-            for d, dd in dims:
+            for d, dd in dims[:6]:
                 f = theano.function([a], a.sum(d).sum(dd).
-                    sum(0), mode=self.mode)
+                                    sum(0), mode=self.mode)
                 assert numpy.allclose(f(input), input.sum(d).sum(dd).sum(0))
                 assert len(f.maker.fgraph.apply_nodes) == 1
             for d in [0, 1, 2]:
                 f = theano.function([a], a.sum(d).sum(None), mode=self.mode)
                 assert numpy.allclose(f(input), input.sum(d).sum())
                 assert len(f.maker.fgraph.apply_nodes) == 1
-            for d in [0, 1, 2]:
-                f = theano.function([a], a.sum(None).sum(), mode=self.mode)
-                assert numpy.allclose(f(input), input.sum())
-                assert len(f.maker.fgraph.apply_nodes) == 1
+            f = theano.function([a], a.sum(None).sum(), mode=self.mode)
+            assert numpy.allclose(f(input), input.sum())
+            assert len(f.maker.fgraph.apply_nodes) == 1
         finally:
             config.warn.sum_sum_bug = backup
 
     def test_local_sum_alloc(self):
         a = T.dtensor3()
         input = numpy.asarray(numpy.arange(2 * 3 * 4).reshape(2, 3, 4),
-             dtype='float64')
+                              dtype='float64')
         mode = self.mode.including('specialize').excluding('fusion')
 
         for t_like,n_like,nb_nodes in [(tensor.zeros_like,numpy.zeros_like,(1,3,3,2)),
@@ -3556,14 +3570,14 @@ class T_local_sum(unittest.TestCase):
             try:
                 for d, dd in [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)]:
                     f = theano.function([a], t_like(a).
-                        sum(d).sum(dd), mode=mode)
+                                        sum(d).sum(dd), mode=mode)
                     assert numpy.allclose(f(input),
-                        n_like(input).sum(d).sum(dd))
+                                          n_like(input).sum(d).sum(dd))
                     assert len(f.maker.fgraph.apply_nodes) == nb_nodes[3]
                     topo = f.maker.fgraph.toposort()
                     assert topo[-1].op == T.alloc
                     assert not any([isinstance(node.op,
-                         T.Sum) for node in topo])
+                                               T.Sum) for node in topo])
             finally:
                 config.warn.sum_sum_bug = backup
 
@@ -3986,6 +4000,35 @@ def test_local_div_to_inv():
     out_val = f(3, 2.)
     assert out_val.shape == (1, 3)
     assert numpy.allclose(out_val, 0.5)
+
+
+def test_local_flatten_lift():
+    for i in range(1, 4):
+        op = tensor.Flatten(i)
+        x = tensor.tensor4()
+        out = op(T.exp(x))
+        assert out.ndim == i
+        mode = compile.mode.get_default_mode()
+        mode = mode.including('local_flatten_lift')
+        f = theano.function([x], out, mode=mode)
+        f(numpy.random.rand(5, 4, 3, 2).astype(config.floatX))
+        topo = f.maker.fgraph.toposort()
+        assert len(topo) == 2
+        assert isinstance(topo[0].op, tensor.Flatten)
+        assert isinstance(topo[1].op, tensor.Elemwise)
+
+
+def test_local_reshape_lift():
+    x = tensor.tensor4()
+    out = T.exp(x).reshape([x.size])
+    assert out.ndim == 1
+    mode = compile.mode.get_default_mode()
+    mode = mode.including('local_reshape_lift')
+    f = theano.function([x], out, mode=mode)
+    f(numpy.random.rand(5, 4, 3, 2).astype(config.floatX))
+    topo = f.maker.fgraph.toposort()
+    assert isinstance(topo[-2].op, tensor.Reshape)
+    assert isinstance(topo[-1].op, tensor.Elemwise)
 
 
 class Test_lift_transpose_through_dot(unittest.TestCase):

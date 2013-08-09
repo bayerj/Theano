@@ -1,5 +1,4 @@
 import sys
-import traceback
 from copy import copy
 from itertools import izip
 
@@ -10,7 +9,7 @@ from theano import gof
 from theano.gof import Apply, Op
 from theano import scalar
 from theano.scalar import Scalar
-from theano.printing import min_informative_str, pprint
+from theano.printing import pprint
 from theano.gof.python25 import all, any
 from theano.tensor.utils import hash_from_dict
 from theano.gradient import DisconnectedType
@@ -530,7 +529,6 @@ class Elemwise(Op):
         is left-completed to the greatest number of dimensions with 1s
         using DimShuffle.
         """
-
         inputs = map(as_tensor_variable, inputs)
         shadow = self.scalar_op.make_node(
                 *[Scalar(dtype=i.type.dtype)() for i in inputs])
@@ -742,7 +740,7 @@ class Elemwise(Op):
             scalar_ograds = map(as_scalar, ograds)
             scalar_igrads = self.scalar_op.grad(scalar_inputs, scalar_ograds)
             for igrad in scalar_igrads:
-                assert igrad is not None
+                assert igrad is not None, self.scalar_op
 
         finally:
 
@@ -807,14 +805,7 @@ class Elemwise(Op):
 
                 base_exc_str = 'Dimension mismatch; shapes are %s' % (
                                ', '.join(msg))
-                if config.exception_verbosity == 'high':
-                    msg_chunks = [base_exc_str]
-                    for i, ipt in enumerate(node.inputs):
-                        msg_chunks.append('input %d: %s' %
-                                          (i, min_informative_str(ipt)))
-                    raise ValueError('\n'.join(msg_chunks))
-                else:
-                    raise ValueError(base_exc_str)
+                raise ValueError(base_exc_str)
 
         # Determine the shape of outputs
         out_shape = []
@@ -875,29 +866,7 @@ class Elemwise(Op):
                                       self.scalar_op.nout))
             nout = ufunc.nout
 
-        try:
-            variables = ufunc(*ufunc_args)
-        except Exception, e:
-            errormsg = ('While computing ' + str(node.outputs) +
-                        ': Failed calling ufunc for op ' +
-                        str(self.scalar_op) +
-                        ' for params of shape ' +
-                        str([arg.shape for arg in ufunc_args]))
-
-            if config.exception_verbosity == 'high':
-                errormsg += 'inputs are: \n'
-                for i, ipt in enumerate(node.inputs):
-                    errormsg += '(' + str(i) + ') ' + \
-                            min_informative_str(ipt) + '\n'
-                errormsg += 'outputs are: \n'
-                for i, output in enumerate(node.outputs):
-                    errormsg += '(' + str(i) + ') ' + \
-                            min_informative_str(output) + '\n'
-                errormsg += 'original exception was: ' + '\n'.join(
-                        traceback.format_exception_only(*sys.exc_info()[0:2]))
-
-            e.args = e.args + (errormsg, )
-            raise
+        variables = ufunc(*ufunc_args)
 
         if nout == 1:
             variables = [variables]
@@ -1463,8 +1432,13 @@ class CAReduce(Op):
             axis = range(len(input.type.broadcastable))
 
         if len(axis) == 0:
-            op = Elemwise(scalar.identity)
-            return op._c_all(op.make_node(input), name, inames, onames, sub)
+            # The acc_dtype is never a downcast compared to the input dtype
+            # So we just need a cast to the output dtype.
+            var = theano.tensor.cast(input, node.outputs[0].dtype)
+            if var is input:
+                var = Elemwise(scalar.identity)(input)
+            assert var.dtype == node.outputs[0].dtype
+            return var.owner.op._c_all(var.owner, name, inames, onames, sub)
 
         order1 = [i for i in xrange(input.type.ndim) if i not in axis]
         order = order1 + list(axis)

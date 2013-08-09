@@ -20,21 +20,23 @@ logger = logging.getLogger(__name__)
 
 AddConfigVar('profile',
         "If VM should collect profile information",
-        BoolParam(False))
+        BoolParam(False),
+        in_c_key=False)
 AddConfigVar('profile_optimizer',
         "If VM should collect optimizer profile information",
-        BoolParam(False))
+        BoolParam(False),
+        in_c_key=False)
 AddConfigVar('profile_memory',
         "If VM should collect memory profile information and print it",
-        BoolParam(False))
-
+        BoolParam(False),
+        in_c_key=False)
 
 def filter_vm_lazy(val):
     if val == 'False' or val is False:
         return False
     elif val == 'True' or val is True:
         return True
-    elif val == 'None':
+    elif val == 'None' or val is None:
         return None
     else:
         raise ValueError('Valid values for an vm.lazy parameter '
@@ -45,7 +47,8 @@ AddConfigVar('vm.lazy',
              " auto detect if lazy evaluation is needed and use the apropriate"
              " version. If lazy is True/False, force the version used between"
              " Loop/LoopGC and Stack.",
-         ConfigParam('None', filter_vm_lazy))
+             ConfigParam('None', filter_vm_lazy),
+             in_c_key=False)
 
 raise_with_op = link.raise_with_op
 
@@ -162,7 +165,7 @@ class Loop(VM):
                     self.call_counts[i] += 1
                     self.call_times[i] += t1 - t0
             except:
-                raise_with_op(node)
+                raise_with_op(node, thunk)
         else:
             for cont in self.pre_call_clear:
                 cont[0] = None
@@ -170,7 +173,7 @@ class Loop(VM):
                 for thunk, node in zip(self.thunks, self.nodes):
                     thunk()
             except:
-                raise_with_op(node)
+                raise_with_op(node, thunk)
 
 
 class LoopGC(VM):
@@ -202,7 +205,7 @@ class LoopGC(VM):
                         old_s[0] = None
                     i += 1
             except:
-                raise_with_op(node)
+                raise_with_op(node, thunk)
         else:
             for cont in self.pre_call_clear:
                 cont[0] = None
@@ -213,7 +216,7 @@ class LoopGC(VM):
                     for old_s in old_storage:
                         old_s[0] = None
             except:
-                raise_with_op(node)
+                raise_with_op(node, thunk)
 
 
 class Stack(VM):
@@ -397,7 +400,8 @@ class Stack(VM):
                                     st = 'c'
                                 self.variable_strides[var] = st
                     except Exception:
-                        raise_with_op(current_apply)
+                        raise_with_op(current_apply,
+                                      self.thunks[self.node_idx[current_apply]])
                     for o in current_apply.outputs:
                         compute_map[o][0] = 1
                     if self.allow_gc:
@@ -455,7 +459,8 @@ class Stack(VM):
                     self.call_times[current_idx] += dt
 
                 except Exception:
-                    raise_with_op(current_apply)
+                    raise_with_op(current_apply,
+                                  self.thunks[self.node_idx[current_apply]])
 
                 if requires:
                     for r in requires:
@@ -838,6 +843,9 @@ class VM_Linker(link.LocalLinker):
                     compute_map,
                     no_recycling)
                         for node in order]
+        for node, thunk in zip(order, thunks):
+            thunk.inputs = [storage_map[v] for v in node.inputs]
+            thunk.outputs = [storage_map[v] for v in node.outputs]
 
         computed, last_user = link.gc_helper(order)
         if self.allow_gc:

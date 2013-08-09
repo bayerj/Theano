@@ -527,7 +527,7 @@ MacOS
 -----
 
 There are various ways to install Theano dependencies on a Mac.
-Here we describe the process in detail with EPD or with MacPorts, but if you did
+Here we describe the process in detail with EPD, Anaconda or with MacPorts, but if you did
 it differently and it worked, please let us know the details on the
 `theano-users`_ mailing-list, so that we can add alternate instructions
 here.
@@ -577,6 +577,54 @@ Then you must install g++. You can do this by installing XCode. See the first bu
 
    If you use the trunk or version 0.6 or later of Theano, we try to
    automaticaly link with the EPD blas version.  Due to Mac OS
+   peculiarities, we need a user intervention to do it.  We detect
+   if the user did the modification and if not, we tell him how to do
+   it.
+
+Anaconda 1.5
+~~~~~~~~~~~~
+
+An easy way to install most of the dependencies is to install
+`Anaconda <http://continuum.io/downloads.html>`_. There is a free
+version available to everybody. If you install their ``MKL
+Optimizations`` product (free for academic, ~30$ otherwise) Theano
+will also be optimized as we will reuse the faster BLAS version
+automatically.
+
+Anaconda installation includes in particular Python (and the development headers),
+numpy, scipy, nose, sphinx, pip, and a acceptable BLAS version. The Mac OS and
+Linux version do not include g++.
+
+After installing Anaconda, in a terminal execute this command to
+install the latest Theano release:
+
+    .. code-block:: bash
+
+        $ pip install Theano
+
+To install the missing Theano optional dependency (pydot):
+
+    .. code-block:: bash
+
+        $ conda install pydot
+
+If you want the bleeding edge version, `download
+and install git <http://git-scm.com/downloads>`_. Then in a
+terminal excute this command:
+
+.. code-block:: bash
+
+    $ sudo pip install --upgrade --no-deps git+git://github.com/Theano/Theano.git
+
+See the section `install_bleeding_edge`_ for more
+information on the bleading edge version.
+
+Then you must install g++. You can do this by installing XCode. See the first bullet in the :ref:`macports` section.
+
+.. note::
+
+   If you use the trunk or a version after 0.6rc3 of Theano, we try to
+   automaticaly link with the python library.  Due to Mac OS
    peculiarities, we need a user intervention to do it.  We detect
    if the user did the modification and if not, we tell him how to do
    it.
@@ -802,7 +850,7 @@ You can then proceed to the :ref:`windows_basic` or the :ref:`windows_bleeding_e
 Alternative: Canopy
 ###################
 
-Another software from Enthought that install all Theano dependancy.
+Another software from Enthought that installs all Theano dependencies.
 If you are affiliated with a university (as student or employee), you
 can download the installation for free.
 
@@ -815,8 +863,8 @@ can download the installation for free.
 - In Canopy Package Manager, search and install packages "mingw 4.5.2" and "libpython 1.2"
 - (Needed only for Theano 0.6rc3 or earlier)
   The "libpython 1.2" package installs files `libpython27.a` and `libmsvcr90.a` to
-  `C:\Users\<USER>\AppData\Local\Enthought\Canopy\User\libs`. Copy the two files to
-  `C:\Users\<USER>\AppData\Local\Enthought\Canopy\App\appdata\canopy-1.0.0.1160.win-x86_64\libs`.
+  `C:\\Users\\<USER>\\AppData\\Local\\Enthought\\Canopy\\User\\libs`. Copy the two files to
+  `C:\\Users\\<USER>\\AppData\\Local\\Enthought\\Canopy\\App\\appdata\\canopy-1.0.0.1160.win-x86_64\libs`.
 - (Needed only for Theano 0.6rc3 or earlier) Set the Theano flags
   ``blas.ldflags=-LC:\Users\<USER>\AppData\Local\Enthought\Canopy\App\appdata\canopy-1.0.0.1160.win-x86_64\Scripts -lmk2_core -lmk2_intel_thread -lmk2_rt``.
 

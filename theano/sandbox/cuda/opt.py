@@ -9,7 +9,7 @@ import numpy
 
 import theano
 from theano import scalar as scal
-from theano import tensor, gof
+from theano import config, tensor, gof
 import theano.ifelse
 
 from theano.compile import optdb
@@ -17,7 +17,13 @@ from theano.gof import (local_optimizer, EquilibriumDB, SequenceDB, ProxyDB,
                         Optimizer, toolbox, DestroyHandler,
                         EquilibriumOptimizer)
 from theano.gof.python25 import all, any
-from theano.sandbox.cuda.basic_ops import *
+from theano.sandbox.cuda.basic_ops import (
+    device_properties, gpu_eye,
+    gpu_from_host, host_from_gpu, HostFromGpu,
+    GpuElemwise, GpuDimShuffle, GpuReshape, GpuCAReduce, GpuFlatten,
+    GpuSubtensor, GpuAdvancedSubtensor1,
+    GpuAdvancedIncSubtensor1, GpuAdvancedIncSubtensor1_dev20,
+    GpuIncSubtensor, gpu_alloc, GpuAlloc, gpu_shape)
 from theano.sandbox.cuda.type import CudaNdarrayType
 from theano.sandbox.cuda.blas import (gpu_dot22, gpu_dot22scalar,
         gpu_gemm_inplace, gpu_gemm_no_inplace, GpuConv)
@@ -102,7 +108,7 @@ class InputToGpuOptimizer(Optimizer):
                 if new_input.type == input.type:
                     fgraph.replace_validate(input, new_input,
                                          "InputToGpuOptimizer")
-            except TypeError, e:
+            except TypeError:
                 #as we currently only support float32, this can fail.
                 #Using try except make that we won't need
                 pass
@@ -289,7 +295,7 @@ def local_gpu_dimshuffle_0(node):
 def local_gpu_specifyShape_0(node):
     """
     specify_shape(host_from_gpu()) -> host_from_gpu(specify_shape)
-    gpu_from_host(specify_shape) -> specifyshape(gpu_from_host)
+    gpu_from_host(specify_shape) -> specify_shape(gpu_from_host)
     """
     if isinstance(node.op, tensor.SpecifyShape):
         input = node.inputs[0]
@@ -403,7 +409,12 @@ def local_gpu_lazy_ifelse(node):
         host_input = node.inputs[0]
         if (host_input.owner and
             isinstance(host_input.owner.op, theano.ifelse.IfElse) and
-            not host_input.owner.op.gpu):
+            not host_input.owner.op.gpu and
+            # If there is more then 1 outputs, we can't replace it
+            # here with a local optimizer as we replace the
+            # GpuFromHost node and the other output of the if won't be
+            # replaced.
+            host_input.owner.op.n_outs == 1):
             gpu_ifelse = theano.ifelse.IfElse(host_input.owner.op.n_outs,
                                                   gpu=True)
 
@@ -597,7 +608,7 @@ def local_gpu_careduce(node):
         scalar_op = node.op.scalar_op
         # currently, only these two ops are supported at all,
         # and max does not support all combinations of axes
-        if node.op.scalar_op in [scal.add, scal.maximum, scal.minimum]:
+        if node.op.scalar_op in [scal.add, scal.mul, scal.maximum, scal.minimum]:
             x, = node.inputs
             if x.owner and x.owner.op == host_from_gpu:
                 if node.op.axis is None:
@@ -657,9 +668,6 @@ def local_gpu_careduce(node):
                                 "WARNING: local_gpu_careduce got type wrong"
                             return None
 
-                        raise Exception(
-                            "GpuCAReduce does not yet implement this pattern:",
-                            pattern)
     return False
 
 
@@ -776,9 +784,16 @@ def local_gpu_advanced_incsubtensor1(node):
                     'either set the `warn.gpu_set_subtensor1` config '
                     'option to False, or `warn.ignore_bug_before` to at '
                     'least \'0.6\'.', stacklevel=1)
-
-            gpu_op = GpuAdvancedIncSubtensor1(
-                set_instead_of_inc=set_instead_of_inc)
+            active_device_no = theano.sandbox.cuda.active_device_number()
+            compute_capability = device_properties(active_device_no)['major']
+            if (compute_capability < 2 or
+                x.ndim != 2 or
+                y.ndim != 2):
+                gpu_op = GpuAdvancedIncSubtensor1(
+                    set_instead_of_inc=set_instead_of_inc)
+            else:
+                gpu_op = GpuAdvancedIncSubtensor1_dev20(
+                    set_instead_of_inc=set_instead_of_inc)
             return [gpu_op(gpu_from_host(x), gpu_from_host(y), *coords)]
 
     # Should not execute for GpuAdvancedIncSubtensor1
@@ -809,8 +824,16 @@ def local_gpu_advanced_incsubtensor1(node):
                     'option to False, or `warn.ignore_bug_before` to at '
                     'least \'0.6\'.', stacklevel=1)
 
-            gpu_op = GpuAdvancedIncSubtensor1(
-                set_instead_of_inc=set_instead_of_inc)
+            active_device_no = theano.sandbox.cuda.active_device_number()
+            compute_capability = device_properties(active_device_no)['major']
+            if (compute_capability < 2 or
+                x.ndim != 2 or
+                y.ndim != 2):
+                gpu_op = GpuAdvancedIncSubtensor1(
+                    set_instead_of_inc=set_instead_of_inc)
+            else:
+                gpu_op = GpuAdvancedIncSubtensor1_dev20(
+                    set_instead_of_inc=set_instead_of_inc)
             return [host_from_gpu(gpu_op(gpu_x, gpu_y, *coords))]
     return False
 
@@ -1197,7 +1220,8 @@ def get_device_type_sizes():
     int_size = 8
     try:
 
-        t = cuda_ndarray.cuda_ndarray.ptr_int_size()
+        cuda_ndarray = theano.sandbox.cuda.cuda_ndarray.cuda_ndarray
+        t = cuda_ndarray.ptr_int_size()
         gpu_ptr_size, cpu_ptr_size, int_size, gpu_int_size = t
         assert int_size == gpu_int_size
         del gpu_int_size
@@ -1317,6 +1341,8 @@ def local_gpualloc(node):
                 for c, idx in node.outputs[0].clients]):
             # if the client is a subtensor with input on gpu or alloc
             replace = True
+        if replace and node.inputs[0].dtype != 'float32':
+            replace = False
     if replace:
         val = node.inputs[0]
         shp = node.inputs[1:]
@@ -1436,6 +1462,32 @@ def tensor_to_cuda(x):
         return y
     else:
         return x
+
+
+@register_opt()
+@local_optimizer([])
+def local_gpu_extract_diagonal(node):
+    """
+    extract_diagonal(host_from_gpu()) -> host_from_gpu(extract_diagonal)
+    gpu_from_host(extract_diagonal) -> extract_diagonal(gpu_from_host)
+    """
+    from theano.sandbox import linalg
+    if (isinstance(node.op, linalg.ops.ExtractDiag) and
+        isinstance(node.inputs[0].type,
+                   theano.tensor.TensorType)):
+        inp = node.inputs[0]
+        if inp.owner and isinstance(inp.owner.op, HostFromGpu):
+            return [host_from_gpu(linalg.extract_diag(gpu_from_host(inp)))]
+    if node.op == gpu_from_host:
+        host_input = node.inputs[0]
+        if (host_input.owner and
+            isinstance(host_input.owner.op, linalg.ops.ExtractDiag) and
+            isinstance(host_input.owner.inputs[0].type,
+                       theano.tensor.TensorType)):
+            diag_node = host_input.owner
+            return [linalg.extract_diag(
+                gpu_from_host(diag_node.inputs[0]))]
+    return False
 
 
 @register_opt('scan')
